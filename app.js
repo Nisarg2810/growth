@@ -191,7 +191,9 @@ const toRow = m => ({
   [COLS.daily]: (m.daily || []).join(', '), [COLS.days]: daysText(m.days), [COLS.from]: m.from || '',
   [COLS.ingredients]: (m.ingredients || []).map(x => [x.name, x.qty, x.kcal, x.p, x.c, x.f].join(' | ')).join('\n'),
 });
-const isWorkout = m => m?.kind === 'workout';
+// workouts burn calories, they're never counted as eaten. Ids starting "run-", "workout-" or "w-" are workouts even when
+// an older backend script doesn't send the Type column.
+const isWorkout = m => m?.kind === 'workout' || /^(run-|workout-|w-|w[a-z0-9]{7}$)/i.test(m?.id || '');
 // signed in: the Meals tab of your Sheet; this-device mode: stored locally
 const lib = () => (signedIn() ? CLOUD_MEALS : S.meals);
 const mealById = id => lib().find(m => m.id === id);
