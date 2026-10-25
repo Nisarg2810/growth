@@ -2,9 +2,9 @@
 // Setup: paste this into your Google Sheet ▸ Extensions ▸ Apps Script (replace everything),
 // set PASSWORD below, Save, then Deploy ▸ New deployment ▸ Web app
 // (Execute as: Me · Who has access: Anyone). Without the password it refuses to read or write anything.
+// Updating later: paste the new code, keep your PASSWORD line, Save, then Deploy ▸ Manage deployments ▸ ✏️ ▸ Version: New version ▸ Deploy.
 const PASSWORD = 'CHANGE-ME';
 const CHUNK = 40000; // Sheets cells hold max 50k characters
-const MEAL_HEAD = ['id', 'Meal', 'Details', 'kcal', 'Protein g', 'Carbs g', 'Fat g', 'Every day at', 'From', 'Ingredients (one per line: name | qty | kcal | P | C | F)'];
 
 function doGet() {
   return ContentService.createTextOutput('Growth backend is running ✓');
@@ -18,7 +18,7 @@ function doPost(e) {
   try {
     if (body.action === 'get') return json_(read_());
     if (body.action === 'put') return json_(write_(body));
-    if (body.action === 'saveMeal') return json_(saveMeal_(body.meal));
+    if (body.action === 'saveMeal') return json_(saveMeal_(body.row));
     if (body.action === 'deleteMeal') return json_(deleteMeal_(body.id));
     return json_({ ok: false, error: 'Unknown action' });
   } finally {
@@ -33,7 +33,7 @@ function read_() {
   // each chunk is stored with a leading "x" so Sheets never turns it into a number, date or formula
   if (sh && sh.getLastRow() > 0) data = JSON.parse(sh.getRange(1, 1, sh.getLastRow(), 1).getValues().map(function (r) { return String(r[0]).slice(1); }).join(''));
   const updatedAt = Number(PropertiesService.getScriptProperties().getProperty('updatedAt') || 0);
-  return { ok: true, data: data, updatedAt: updatedAt, meals: readMeals_() };
+  return { ok: true, version: 2, data: data, updatedAt: updatedAt, mealRows: readMeals_() };
 }
 
 function write_(body) {
@@ -66,71 +66,77 @@ function table_(sh, rows) {
   sh.getRange(1, 1, 1, head.length).setFontWeight('bold');
 }
 
-/* ---------- Meals tab: one row per meal, editable by hand ---------- */
+/* ---------- Meals tab: one row per meal or workout, editable by hand ---------- */
+// Columns are matched by their header name, so new columns can be added without changing this script.
 function mealsSheet_() {
   const ss = SpreadsheetApp.getActive();
   let sh = ss.getSheetByName('Meals');
   if (!sh) {
     sh = ss.insertSheet('Meals', 0);
-    sh.getRange(1, 1, 1, MEAL_HEAD.length).setValues([MEAL_HEAD]).setFontWeight('bold');
+    sh.getRange(1, 1, 1, 2).setValues([['id', 'Meal']]).setFontWeight('bold');
     sh.setFrozenRows(1);
-    sh.getRange('H:I').setNumberFormat('@'); // keep "07:00, 17:00" and dates as plain text
-    sh.getRange('J:J').setWrap(true);
   }
   return sh;
 }
 
-function text_(v, kind) {
-  if (v instanceof Date) return Utilities.formatDate(v, Session.getScriptTimeZone(), kind === 'time' ? 'HH:mm' : 'yyyy-MM-dd');
-  return String(v === undefined || v === null ? '' : v);
+function head_(sh) {
+  return sh.getRange(1, 1, 1, Math.max(sh.getLastColumn(), 1)).getValues()[0].map(function (h) { return String(h).trim(); });
 }
 
+// rows as { header: displayed text } — displayed text keeps "07:00" and dates exactly as you see them
 function readMeals_() {
-  const sh = mealsSheet_(), n = sh.getLastRow() - 1;
+  const sh = mealsSheet_(), head = head_(sh), n = sh.getLastRow() - 1;
   if (n < 1) return [];
-  const rows = sh.getRange(2, 1, n, MEAL_HEAD.length).getValues();
+  const idCol = head.indexOf('id');
+  const values = sh.getRange(2, 1, n, head.length).getDisplayValues();
   const out = [];
-  rows.forEach(function (r, i) {
-    if (!String(r[1]).trim()) return;
-    let id = String(r[0]).trim();
-    if (!id) { id = 'm' + Utilities.getUuid().slice(0, 8); sh.getRange(i + 2, 1).setValue(id); } // rows typed in by hand get an id
-    out.push({
-      id: id, title: String(r[1]).trim(), details: text_(r[2]),
-      kcal: +r[3] || 0, p: +r[4] || 0, c: +r[5] || 0, f: +r[6] || 0,
-      daily: text_(r[7], 'time').split(/[,\s]+/).filter(function (t) { return /^\d{1,2}:\d{2}$/.test(t); }).map(function (t) { return ('0' + t).slice(-5); }),
-      from: text_(r[8], 'date'),
-      ingredients: text_(r[9]).split('\n').map(function (l) { return l.split('|').map(function (x) { return x.trim(); }); })
-        .filter(function (x) { return x[0]; })
-        .map(function (x) { return { name: x[0], qty: x[1] || '', kcal: +x[2] || 0, p: +x[3] || 0, c: +x[4] || 0, f: +x[5] || 0 }; }),
-    });
+  values.forEach(function (r, i) {
+    if (!r.some(function (v) { return String(v).trim(); })) return;
+    if (idCol >= 0 && !String(r[idCol]).trim()) { // rows typed in by hand get an id
+      r[idCol] = 'm' + Utilities.getUuid().slice(0, 8);
+      sh.getRange(i + 2, idCol + 1).setValue(r[idCol]);
+    }
+    const row = {};
+    head.forEach(function (h, c) { if (h) row[h] = r[c]; });
+    out.push(row);
   });
   return out;
 }
 
-function mealRow_(m) {
-  return [m.id, m.title, m.details || '', +m.kcal || 0, +m.p || 0, +m.c || 0, +m.f || 0, (m.daily || []).join(', '), m.from || '',
-    (m.ingredients || []).map(function (x) { return [x.name, x.qty, x.kcal, x.p, x.c, x.f].join(' | '); }).join('\n')];
-}
-
-function findRow_(sh, id) {
-  const n = sh.getLastRow() - 1;
-  if (n < 1) return -1;
-  const ids = sh.getRange(2, 1, n, 1).getValues();
-  for (let i = 0; i < n; i++) if (String(ids[i][0]) === id) return i + 2;
-  return -1;
-}
-
-function saveMeal_(m) {
-  const sh = mealsSheet_(), row = findRow_(sh, m.id);
-  if (row > 0) sh.getRange(row, 1, 1, MEAL_HEAD.length).setValues([mealRow_(m)]);
-  else sh.appendRow(mealRow_(m));
+function saveMeal_(row) {
+  const sh = mealsSheet_();
+  let head = head_(sh);
+  // add any column the app sends that the sheet doesn't have yet
+  Object.keys(row).forEach(function (h) {
+    if (head.indexOf(h) < 0) {
+      const col = head.filter(String).length + 1;
+      sh.getRange(1, col).setValue(h).setFontWeight('bold');
+      head = head_(sh);
+    }
+  });
+  const values = head.map(function (h) { return row[h] === undefined ? '' : row[h]; });
+  ['id', 'Every day at', 'Days', 'From'].forEach(function (h) { // plain text: keeps 07:00 and dates exactly as typed
+    const c = head.indexOf(h) + 1;
+    if (c) sh.getRange(1, c, sh.getMaxRows(), 1).setNumberFormat('@');
+  });
+  const r = findRow_(sh, head, row.id);
+  if (r > 0) sh.getRange(r, 1, 1, head.length).setValues([values]);
+  else sh.appendRow(values);
   return { ok: true };
 }
 
 function deleteMeal_(id) {
-  const sh = mealsSheet_(), row = findRow_(sh, id);
-  if (row > 0) sh.deleteRow(row);
+  const sh = mealsSheet_(), r = findRow_(sh, head_(sh), id);
+  if (r > 0) sh.deleteRow(r);
   return { ok: true };
+}
+
+function findRow_(sh, head, id) {
+  const col = head.indexOf('id') + 1, n = sh.getLastRow() - 1;
+  if (!col || n < 1) return -1;
+  const ids = sh.getRange(2, col, n, 1).getValues();
+  for (let i = 0; i < n; i++) if (String(ids[i][0]) === String(id)) return i + 2;
+  return -1;
 }
 
 function sheet_(ss, name) {

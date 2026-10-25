@@ -30,6 +30,7 @@ const ICON = {
   plan: svg('<rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>', 22),
   meals: svg('<path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2M7 2v20M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/>', 22),
   progress: svg('<path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/>', 22),
+  run: svg('<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>', 14),
   flame: svg('<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.07-2.14-.22-4.05 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.15.43-2.29 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>', 14),
 };
 
@@ -85,7 +86,8 @@ async function cloud(action, extra = {}, token = AUTH.token) {
   return j;
 }
 function applyCloud(j) {
-  CLOUD_MEALS = j.meals || []; write(MEALS_KEY, CLOUD_MEALS);
+  CLOUD_MEALS = j.mealRows ? j.mealRows.map(fromRow).filter(m => m.title) : j.meals || [];
+  write(MEALS_KEY, CLOUD_MEALS);
   const local = S.updatedAt || 0;
   if (j.data && j.updatedAt > local) { S = merge(structuredClone(DEFAULT), j.data); write(KEY, S); }
   else if (local > (j.updatedAt || 0)) schedulePush(0);
@@ -147,6 +149,49 @@ async function signOut(expired) {
 }
 
 /* ---------- meal library ---------- */
+// The Sheet's Meals tab: one row per meal or workout, columns matched by header name
+const COLS = {
+  id: 'id', title: 'Meal', kind: 'Type', details: 'Details', kcal: 'kcal', p: 'Protein g', c: 'Carbs g', f: 'Fat g',
+  daily: 'Every day at', days: 'Days', from: 'From', ingredients: 'Ingredients (one per line: name | qty | kcal | P | C | F)',
+};
+const DAY3 = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+// "Mon-Sat", "Mon, Wed, Fri", "Weekdays" → [0..6] (Mon = 0); blank / "Every day" → [] meaning all days
+function parseDays(str) {
+  const t = String(str || '').toLowerCase().trim(), ix = w => DAY3.findIndex(d => w.trim().startsWith(d.toLowerCase()));
+  if (!t || /every|daily|all/.test(t)) return [];
+  if (/weekday/.test(t)) return [0, 1, 2, 3, 4];
+  if (/weekend/.test(t)) return [5, 6];
+  const out = new Set();
+  t.split(/[,/&]| and /).forEach(part => {
+    const [a, b] = part.split(/\s*(?:-|–|to)\s*/).map(ix);
+    if (a < 0) return;
+    if (b === undefined || b < 0) out.add(a); else for (let i = a; ; i = (i + 1) % 7) { out.add(i); if (i === b) break; }
+  });
+  return [...out].sort();
+}
+function daysText(days) {
+  if (!days?.length || days.length === 7) return '';
+  const contiguous = days.every((d, i) => !i || d === days[i - 1] + 1);
+  return contiguous && days.length > 2 ? `${DAY3[days[0]]}-${DAY3[days.at(-1)]}` : days.map(d => DAY3[d]).join(', ');
+}
+function fromRow(r) {
+  const keys = Object.keys(r);
+  const get = h => { const k = keys.find(x => x === h) ?? keys.find(x => x.toLowerCase().startsWith(h.split(' (')[0].toLowerCase())); return k ? String(r[k] ?? '').trim() : ''; };
+  return {
+    id: get(COLS.id), title: get(COLS.title), kind: /work|exercise|run|gym|walk|yoga/i.test(get(COLS.kind)) ? 'workout' : 'food',
+    details: get(COLS.details), kcal: +get(COLS.kcal) || 0, p: +get(COLS.p) || 0, c: +get(COLS.c) || 0, f: +get(COLS.f) || 0,
+    daily: (get(COLS.daily).match(/\d{1,2}:\d{2}/g) || []).map(t => t.padStart(5, '0')), days: parseDays(get(COLS.days)), from: get(COLS.from),
+    ingredients: get(COLS.ingredients).split('\n').map(l => l.split('|').map(x => x.trim())).filter(x => x[0])
+      .map(x => ({ name: x[0], qty: x[1] || '', kcal: +x[2] || 0, p: +x[3] || 0, c: +x[4] || 0, f: +x[5] || 0 })),
+  };
+}
+const toRow = m => ({
+  [COLS.id]: m.id, [COLS.title]: m.title, [COLS.kind]: m.kind === 'workout' ? 'Workout' : 'Meal', [COLS.details]: m.details || '',
+  [COLS.kcal]: +m.kcal || 0, [COLS.p]: +m.p || 0, [COLS.c]: +m.c || 0, [COLS.f]: +m.f || 0,
+  [COLS.daily]: (m.daily || []).join(', '), [COLS.days]: daysText(m.days), [COLS.from]: m.from || '',
+  [COLS.ingredients]: (m.ingredients || []).map(x => [x.name, x.qty, x.kcal, x.p, x.c, x.f].join(' | ')).join('\n'),
+});
+const isWorkout = m => m?.kind === 'workout';
 // signed in: the Meals tab of your Sheet; this-device mode: stored locally
 const lib = () => (signedIn() ? CLOUD_MEALS : S.meals);
 const mealById = id => lib().find(m => m.id === id);
@@ -163,7 +208,7 @@ async function persistMeal(m, quiet) {
   write(MEALS_KEY, CLOUD_MEALS);
   if (!quiet) render();
   setSync('syncing');
-  try { await cloud('saveMeal', { meal: m }); lastSync = Date.now(); setSync('ok'); } catch (e) { setSync('error', e.message); toast('Couldn’t save the meal to your Sheet'); }
+  try { await cloud('saveMeal', { meal: m, row: toRow(m) }); lastSync = Date.now(); setSync('ok'); } catch (e) { setSync('error', e.message); toast('Couldn’t save the meal to your Sheet'); }
 }
 async function removeMeal(id) {
   if (!signedIn()) { S.meals = S.meals.filter(m => m.id !== id); save(); render(); return; }
@@ -190,7 +235,7 @@ const menu = ws => (S.menus[ws] ??= { slots: [] });
 const slotsOf = ws => S.menus[ws]?.slots || [];
 const weekKeys = ws => [...Array(7)].map((_, i) => ymd(addDays(parse(ws), i)));
 // meals with "Every day at" times are added to each day automatically from their start date
-const dailyOn = k => lib().filter(m => m.daily?.length && (!m.from || m.from <= k))
+const dailyOn = k => lib().filter(m => m.daily?.length && (!m.from || m.from <= k) && (!m.days?.length || m.days.includes(dowIdx(k))))
   .flatMap(m => m.daily.map(t => ({ id: `d-${m.id}-${t.replace(':', '')}`, day: dowIdx(k), time: t, mealId: m.id, daily: true })));
 const slotsOn = k => [...dailyOn(k), ...slotsOf(weekOf(k)).filter(s => s.day === dowIdx(k))].sort(byTime);
 const planned = ws => slotsOf(ws).length;
@@ -200,16 +245,17 @@ function day(k) {
   return d;
 }
 const ate = (k, s) => !!S.days[k]?.ate?.[s.id];
+const isW = s => isWorkout(slotMeal(s));
 // live values from the library; a snapshot keeps history right if a meal is later deleted
 function slotMeal(s) {
   const m = mealById(s.mealId);
-  if (m && !s.daily) s.snap = { title: m.title, kcal: +m.kcal || 0, p: +m.p || 0, c: +m.c || 0, f: +m.f || 0 };
+  if (m && !s.daily) s.snap = { title: m.title, kind: m.kind, kcal: +m.kcal || 0, p: +m.p || 0, c: +m.c || 0, f: +m.f || 0 };
   return m || s.snap || { title: '(deleted meal)', ...ZERO };
 }
 // past days count fully; today only meals already ticked or whose time has passed. null = nothing planned
-function adherence(k, soFar = true) {
+function adherence(k, soFar = true, workouts = false) {
   if (k > today()) return null;
-  const all = slotsOn(k);
+  const all = slotsOn(k).filter(s => isW(s) === workouts);
   if (!all.length) return null;
   const items = soFar && k === today() ? all.filter(s => ate(k, s) || (s.time && s.time <= nowHM())) : all;
   if (!items.length) return null;
@@ -217,7 +263,7 @@ function adherence(k, soFar = true) {
   return { done, n: items.length, pct: done / items.length };
 }
 function totals(k) {
-  const all = slotsOn(k), extra = S.days[k]?.extra || [];
+  const all = slotsOn(k).filter(s => !isW(s)), extra = S.days[k]?.extra || []; // workouts burn, they aren't eaten
   return {
     planned: sumN(all.map(slotMeal)),
     eaten: sumN([...all.filter(s => ate(k, s)).map(slotMeal), ...extra]),
@@ -225,10 +271,10 @@ function totals(k) {
   };
 }
 const onPlan = k => { const a = adherence(k); return !!a && a.pct >= planHit(); };
-function planSum(keys) {
+function planSum(keys, workouts = false) {
   let done = 0, n = 0, days = 0, hit = 0;
   keys.forEach(k => {
-    const a = adherence(k);
+    const a = adherence(k, true, workouts);
     if (!a) return;
     done += a.done; n += a.n; days++;
     if (a.pct >= planHit()) hit++;
@@ -239,6 +285,16 @@ function planStreak() {
   let d = new Date(), n = 0;
   if (!onPlan(ymd(d))) d = addDays(d, -1);
   while (onPlan(ymd(d))) { n++; d = addDays(d, -1); }
+  return n;
+}
+// consecutive scheduled workouts done; rest days don't break it, and today counts only once done
+function workoutStreak() {
+  let n = 0;
+  for (let i = 0, d = new Date(); i < 400; i++, d = addDays(d, -1)) {
+    const a = adherence(ymd(d), false, true);
+    if (!a) continue;
+    if (a.done === a.n) n++; else if (ymd(d) !== today()) break;
+  }
   return n;
 }
 function bestStreak() {
@@ -338,7 +394,9 @@ function closeSheet() {
 const sheetHead = (title, sub = '') => `<div class="sh-head"><div><h3>${title}</h3>${sub ? `<p class="sub">${sub}</p>` : ''}</div>
   <button class="icon-btn" data-act="closeSheet" aria-label="Close">${ICON.x}</button></div>`;
 const searchBox = (list, ph) => `<label class="search">${ICON.search}<input data-q="${list}" placeholder="${ph}" autocomplete="off"></label>`;
-const mealSub = m => `${kc(+m.kcal || 0)} kcal · ${g(+m.p || 0)}g protein`;
+const burnText = m => (+m.kcal ? `~${kc(m.kcal)} kcal burned` : 'workout');
+const mealSub = m => (isWorkout(m) ? `Workout · ${burnText(m)}` : `${kc(+m.kcal || 0)} kcal · ${g(+m.p || 0)}g protein`);
+const scheduleText = m => (m.daily?.length ? `${daysText(m.days) || 'Every day'} at ${m.daily.join(', ')}` : '');
 const match = (m, q) => m.title.toLowerCase().includes(q.trim().toLowerCase()) || (m.details || '').toLowerCase().includes(q.trim().toLowerCase());
 const pickRows = (q, act) => {
   const list = libSorted().filter(m => match(m, q));
@@ -409,27 +467,31 @@ const ACTIONS = {
   openMeal: id => {
     const m = mealById(id);
     openSheet(`${sheetHead(esc(m.title), m.details ? esc(m.details) : '')}
-      <div class="bignut"><div><b>${kc(+m.kcal || 0)}</b><small>kcal</small></div><div><b>${g(+m.p || 0)}g</b><small>protein</small></div>
-        <div><b>${g(+m.c || 0)}g</b><small>carbs</small></div><div><b>${g(+m.f || 0)}g</b><small>fat</small></div></div>
-      ${m.daily?.length ? `<p class="dailynote">${ICON.repeat} Every day at ${m.daily.join(', ')}</p>` : ''}
+      ${isWorkout(m) ? `<div class="bignut one"><div><b>${+m.kcal ? '~' + kc(m.kcal) : '–'}</b><small>kcal burned (estimate)</small></div></div>`
+        : `<div class="bignut"><div><b>${kc(+m.kcal || 0)}</b><small>kcal</small></div><div><b>${g(+m.p || 0)}g</b><small>protein</small></div>
+        <div><b>${g(+m.c || 0)}g</b><small>carbs</small></div><div><b>${g(+m.f || 0)}g</b><small>fat</small></div></div>`}
+      ${m.daily?.length ? `<p class="dailynote">${ICON.repeat} ${scheduleText(m)}</p>` : ''}
       ${m.ingredients?.length ? `<h4>Recipe</h4><table class="ing"><tr><th>Ingredient</th><th>kcal</th><th>P</th><th>C</th><th>F</th></tr>
         ${m.ingredients.map(x => `<tr><td>${esc(x.name)}<small>${esc(x.qty)}</small></td><td>${kc(x.kcal)}</td><td>${+(+x.p).toFixed(1)}</td><td>${+(+x.c).toFixed(1)}</td><td>${+(+x.f).toFixed(1)}</td></tr>`).join('')}</table>` : ''}
       <div class="sh-actions"><button class="btn ghost" data-act="editMeal" data-v="${esc(m.id)}">Edit</button>
         <button class="btn ghost danger" data-act="delMeal" data-v="${esc(m.id)}">Delete</button></div>`);
   },
-  newMeal: () => mealForm({ id: '', title: '', details: '', kcal: '', p: '', c: '', f: '', daily: [] }),
+  newMeal: () => mealForm({ id: '', kind: 'food', title: '', details: '', kcal: '', p: '', c: '', f: '', daily: [], days: [] }),
   editMeal: id => mealForm(mealById(id)),
   saveMealForm: () => {
     const v = id => $(`#mf-${id}`).value.trim();
     if (!v('title')) return toast('Give the meal a name');
     const old = UI.editing?.id ? mealById(UI.editing.id) : null;
     const daily = v('daily').split(/[,\s]+/).filter(t => /^\d{1,2}:\d{2}$/.test(t)).map(t => t.padStart(5, '0'));
+    const kind = document.querySelector('input[name="mf-kind"]:checked')?.value || 'food';
+    const days = [...document.querySelectorAll('input[name="mf-day"]:checked')].map(x => +x.value);
     const m = {
-      ...(old || {}), id: old?.id || 'm' + uid(), title: v('title'), details: v('details'),
-      kcal: +v('kcal') || 0, p: +v('p') || 0, c: +v('c') || 0, f: +v('f') || 0, daily,
+      ...(old || {}), id: old?.id || (kind === 'workout' ? 'w' : 'm') + uid(), kind, title: v('title'), details: v('details'),
+      kcal: +v('kcal') || 0, p: kind === 'workout' ? 0 : +v('p') || 0, c: kind === 'workout' ? 0 : +v('c') || 0, f: kind === 'workout' ? 0 : +v('f') || 0,
+      daily, days: days.length === 7 ? [] : days,
       from: daily.length ? old?.from || today() : '', ingredients: old?.ingredients || [],
     };
-    closeSheet(); persistMeal(m); toast('Meal saved');
+    closeSheet(); persistMeal(m); toast(`${kind === 'workout' ? 'Workout' : 'Meal'} saved`);
   },
   delMeal: id => {
     const m = mealById(id);
@@ -470,12 +532,14 @@ const ACTIONS = {
 };
 function mealForm(m) {
   UI.editing = m;
-  openSheet(`${sheetHead(m.id ? 'Edit meal' : 'New meal', m.id ? '' : 'Tip: send Claude the recipe and it calculates everything for you')}
+  openSheet(`${sheetHead(m.id ? `Edit ${isWorkout(m) ? 'workout' : 'meal'}` : 'New meal or workout', m.id ? '' : 'Tip: send Claude the recipe and it calculates everything for you')}
     <form data-form="meal" class="form">
+      <div class="field">Type<div class="seg">${[['food', 'Meal'], ['workout', 'Workout']].map(([v, l]) => `<label><input type="radio" name="mf-kind" value="${v}" ${(m.kind || 'food') === v ? 'checked' : ''}><span>${l}</span></label>`).join('')}</div></div>
       <label class="field">Name<input id="mf-title" value="${esc(m.title)}" placeholder="Overnight oats" required data-focus></label>
       <label class="field">Details<textarea id="mf-details" rows="2" placeholder="Oats 50 g, milk 200 ml, banana…">${esc(m.details)}</textarea></label>
-      <div class="four">${[['kcal', 'Calories'], ['p', 'Protein g'], ['c', 'Carbs g'], ['f', 'Fat g']].map(([k, l]) => `<label class="field">${l}<input type="number" inputmode="decimal" step="0.1" id="mf-${k}" value="${esc(m[k])}"></label>`).join('')}</div>
-      <label class="field">Every day at <small>optional — e.g. 07:00, 17:00</small><input id="mf-daily" value="${esc((m.daily || []).join(', '))}" placeholder="Leave empty if not daily"></label>
+      <div class="four">${[['kcal', '<span class="lf">Calories</span><span class="lw">kcal burned (estimate)</span>'], ['p', 'Protein g'], ['c', 'Carbs g'], ['f', 'Fat g']].map(([k, l]) => `<label class="field ${k === 'kcal' ? '' : 'food-only'}">${l}<input type="number" inputmode="decimal" step="0.1" id="mf-${k}" value="${esc(m[k])}"></label>`).join('')}</div>
+      <label class="field">Repeats at <small>optional — e.g. 07:00, 17:00</small><input id="mf-daily" value="${esc((m.daily || []).join(', '))}" placeholder="Leave empty to plan it day by day"></label>
+      <div class="field">On these days<div class="daypick">${DAY3.map((d, i) => `<label><input type="checkbox" name="mf-day" value="${i}" ${!m.days?.length || m.days.includes(i) ? 'checked' : ''}><span>${d[0]}</span></label>`).join('')}</div></div>
       <button class="btn wide">Save meal</button></form>`);
 }
 
@@ -549,12 +613,12 @@ function viewToday() {
   const groups = {};
   slots.forEach(s => (groups[periodOf(s.time)] ??= []).push(s));
   const row = s => {
-    const m = slotMeal(s);
-    return `<label class="item ${s.time && s.time < late ? 'late' : ''}">
+    const m = slotMeal(s), w = isWorkout(m);
+    return `<label class="item ${w ? 'workout' : ''} ${s.time && s.time < late ? 'late' : ''}">
       <input type="checkbox" data-p="days.${k}.ate.${s.id}" ${ate(k, s) ? 'checked' : ''}>
       <span class="tick">${ICON.check}</span>
-      <span class="item-main"><b>${esc(m.title)}</b><small>${s.time || 'Any time'} · ${kc(+m.kcal || 0)} kcal${g(+m.p || 0) ? ` · ${g(m.p)}g protein` : ''}</small></span>
-      ${s.daily ? `<span class="chip-daily" title="Every day">${ICON.repeat}</span>` : ''}</label>`;
+      <span class="item-main"><b>${esc(m.title)}</b><small>${s.time || 'Any time'} · ${w ? burnText(m) : `${kc(+m.kcal || 0)} kcal${g(+m.p || 0) ? ` · ${g(m.p)}g protein` : ''}`}</small></span>
+      ${w ? `<span class="tag-w">${ICON.run}Workout</span>` : s.daily ? `<span class="chip-daily" title="Repeats">${ICON.repeat}</span>` : ''}</label>`;
   };
   const list = slots.length ? Object.entries(groups).map(([name, items]) => {
     const done = items.filter(s => ate(k, s)).length;
@@ -585,18 +649,20 @@ function viewPlan() {
   const ws = UI.week, start = parse(ws), end = addDays(start, 6), sun = ymd(addDays(start, -1));
   const m = menu(ws), thisWeek = weekOf(today()), tgt = target(sun).kcal, sd = UI.planDay, date = ymd(addDays(start, sd));
   const tag = ws === thisWeek ? 'This week' : ws === ymd(addDays(parse(thisWeek), 7)) ? 'Next week' : ws < thisWeek ? 'Past week' : '';
-  const T = sumN(weekKeys(ws).flatMap(slotsOn).map(slotMeal));
+  const food = dk => slotsOn(dk).filter(s => !isW(s));
+  const T = sumN(weekKeys(ws).flatMap(food).map(slotMeal));
   const pills = weekKeys(ws).map((dk, i) => {
-    const kcal = sumN(slotsOn(dk).map(slotMeal)).kcal, mine = m.slots.some(s => s.day === i), off = mine && tgt && Math.abs(kcal - tgt) > tgt * 0.1;
+    const kcal = sumN(food(dk).map(slotMeal)).kcal, mine = m.slots.some(s => s.day === i), off = mine && tgt && Math.abs(kcal - tgt) > tgt * 0.1;
     return `<button class="dpill ${i === sd ? 'on' : ''} ${dk === today() ? 'is-today' : ''}" data-act="planDay" data-v="${i}">
       <small>${DAY_ONE[i]}</small><b>${parse(dk).getDate()}</b><span class="${off ? 'off' : mine ? 'ok' : ''}">${kcal ? (kcal / 1000).toFixed(1) + 'k' : '–'}</span></button>`;
   }).join('');
-  const items = slotsOn(date), DT = sumN(items.map(slotMeal)), mine = m.slots.filter(s => s.day === sd);
+  const items = slotsOn(date), DT = sumN(food(date).map(slotMeal)), mine = m.slots.filter(s => s.day === sd);
   const rows = items.map(s => {
     const meal = slotMeal(s);
-    if (s.daily) return `<div class="item static daily"><span class="time">${s.time}</span><span class="item-main"><b>${esc(meal.title)}</b><small>${kc(+meal.kcal || 0)} kcal · every day</small></span><span class="chip-daily">${ICON.repeat}</span></div>`;
-    return `<div class="item static"><input type="time" class="time-in" data-p="menus.${ws}.slots.${m.slots.indexOf(s)}.time" value="${esc(s.time)}">
-      <span class="item-main"><b>${esc(meal.title)}</b><small>${kc(+meal.kcal || 0)} kcal · ${g(+meal.p || 0)}g protein</small></span>
+    const w = isWorkout(meal), sub = w ? burnText(meal) : `${kc(+meal.kcal || 0)} kcal`;
+    if (s.daily) return `<div class="item static daily ${w ? 'workout' : ''}"><span class="time">${s.time}</span><span class="item-main"><b>${esc(meal.title)}</b><small>${sub} · ${daysText(meal.days) || 'every day'}</small></span>${w ? `<span class="tag-w">${ICON.run}</span>` : `<span class="chip-daily">${ICON.repeat}</span>`}</div>`;
+    return `<div class="item static ${w ? 'workout' : ''}"><input type="time" class="time-in" data-p="menus.${ws}.slots.${m.slots.indexOf(s)}.time" value="${esc(s.time)}">
+      <span class="item-main"><b>${esc(meal.title)}</b><small>${w ? sub : `${sub} · ${g(+meal.p || 0)}g protein`}</small></span>
       <button class="icon-btn sm" data-act="delSlot" data-v="${s.id}" aria-label="Remove">${ICON.x}</button></div>`;
   }).join('');
   const over = tgt && DT.kcal > tgt * 1.1, under = tgt && DT.kcal < tgt * 0.9;
@@ -614,7 +680,7 @@ function viewPlan() {
       <div class="dtot ${over ? 'over' : under && DT.kcal ? 'under' : ''}"><b>${kc(DT.kcal)}</b> / ${kc(tgt)} kcal</div></div>
     <div class="mbt big"><i class="${over ? 'over' : ''}" style="width:${tgt ? Math.min(DT.kcal / tgt, 1) * 100 : 0}%"></i></div>
     <div class="list">${rows || '<p class="empty-line">No meals yet for this day.</p>'}</div>
-    <button class="addbtn in" data-act="openAddSlot">${ICON.plus} Add meal</button>
+    <button class="addbtn in" data-act="openAddSlot">${ICON.plus} Add meal or workout</button>
     ${mine.length ? `<div class="copyrow"><span>${ICON.copy} Copy to</span>${[0, 1, 2, 3, 4, 5, 6].filter(x => x !== sd).map(x => `<button class="chip" data-act="copyTo" data-v="${x}">${DAY_LONG[x].slice(0, 3)}</button>`).join('')}
       <button class="chip" data-act="copyTo" data-v="all">All</button></div>` : ''}
   </section>`;
@@ -622,10 +688,13 @@ function viewPlan() {
 
 function mealRows(q = '') {
   const list = libSorted().filter(m => match(m, q));
-  if (!list.length) return `<p class="empty-line">${lib().length ? 'No meal matches that.' : ''}</p>`;
-  return `<div class="card list">${list.map(m => `<button class="item" data-act="openMeal" data-v="${esc(m.id)}">
-    <span class="item-main"><b>${esc(m.title)}</b><small>${kc(+m.kcal || 0)} kcal · P ${g(+m.p || 0)} · C ${g(+m.c || 0)} · F ${g(+m.f || 0)}</small></span>
-    ${m.daily?.length ? `<span class="chip-daily wide">${ICON.repeat}<span>${m.daily.join(', ')}</span></span>` : ''}<i class="chev">${ICON.right}</i></button>`).join('')}</div>`;
+  if (!list.length) return `<p class="empty-line">${lib().length ? 'Nothing matches that.' : ''}</p>`;
+  const rows = items => `<div class="card list">${items.map(m => `<button class="item" data-act="openMeal" data-v="${esc(m.id)}">
+    <span class="item-main"><b>${esc(m.title)}</b><small>${isWorkout(m) ? burnText(m) : `${kc(+m.kcal || 0)} kcal · P ${g(+m.p || 0)} · C ${g(+m.c || 0)} · F ${g(+m.f || 0)}`}</small></span>
+    ${m.daily?.length ? `<span class="chip-daily wide">${isWorkout(m) ? ICON.run : ICON.repeat}<span>${esc(scheduleText(m).replace('Every day at ', ''))}</span></span>` : ''}<i class="chev">${ICON.right}</i></button>`).join('')}</div>`;
+  const W = list.filter(isWorkout), M = list.filter(m => !isWorkout(m));
+  return `${W.length ? `<section class="group first"><div class="ghead"><h4>Workouts</h4><span>${W.length}</span></div>${rows(W)}</section>` : ''}
+    ${M.length ? `<section class="group ${W.length ? '' : 'first'}"><div class="ghead"><h4>Meals</h4><span>${M.length}</span></div>${rows(M)}</section>` : ''}`;
 }
 function viewMeals() {
   const n = lib().length;
@@ -650,7 +719,7 @@ function viewStats() {
   const now = new Date(), k = today(), thisWeek = weekOf(k), TG = target();
   const W = weights(), last = W.at(-1), prev = W.at(-2), first = W[0];
   const last30 = [...Array(30)].map((_, i) => ymd(addDays(now, -i)));
-  const s30 = planSum(last30), sw = planSum(weekKeys(thisWeek));
+  const s30 = planSum(last30), sw = planSum(weekKeys(thisWeek)), ww = planSum(weekKeys(thisWeek), true), w30 = planSum(last30, true);
   const done7 = [...Array(7)].map((_, i) => ymd(addDays(now, -1 - i))).map(totals).filter(T => T.eaten.kcal > 0);
   const avg = key => (done7.length ? done7.reduce((a, T) => a + T.eaten[key], 0) / done7.length : null);
 
@@ -661,16 +730,15 @@ function viewStats() {
     return `<div title="${dk}: ${kc(e)} kcal"><span class="bar"><i class="${cls}" style="height:${(e / max) * 100}%"></i></span><small>${DOW[parse(dk).getDay()][0]}</small></div>`;
   }).join('');
   const startW = addDays(monday(now), -7 * 15);
-  const heat = [...Array(16 * 7)].map((_, i) => {
+  const heat = workouts => [...Array(16 * 7)].map((_, i) => {
     const d = addDays(startW, i), dk = ymd(d);
     if (d > now) return '<i class="future"></i>';
-    const a = adherence(dk);
+    const a = adherence(dk, true, workouts);
     return a ? `<i class="lv${a.pct <= 0 ? 0 : a.pct < 0.4 ? 1 : a.pct < 0.7 ? 2 : a.pct < 1 ? 3 : 4}" title="${dk}: ${a.done}/${a.n}"></i>` : `<i class="lv0 none" title="${dk}"></i>`;
   }).join('');
   const by = {};
   last30.forEach(dk => {
-    if (!adherence(dk)) return;
-    const all = slotsOn(dk), due = dk === k ? all.filter(s => ate(dk, s) || (s.time && s.time <= nowHM())) : all;
+    const all = slotsOn(dk).filter(s => !isW(s)), due = dk === k ? all.filter(s => ate(dk, s) || (s.time && s.time <= nowHM())) : all;
     due.forEach(sl => { const m = slotMeal(sl), r = (by[m.title] ??= { title: m.title, n: 0, done: 0 }); r.n++; if (ate(dk, sl)) r.done++; });
   });
   const missed = Object.values(by).filter(r => r.done < r.n).sort((a, b) => a.done / a.n - b.done / b.n).slice(0, 5);
@@ -680,7 +748,8 @@ function viewStats() {
   <div class="kpis">
     <div class="card kpi"><small>Weight</small><b>${last ? last.kg : '–'}<span>kg</span></b><em class="${prev && last.kg < prev.kg ? 'good' : ''}">${prev ? kgDiff(last.kg - prev.kg) + ' this week' : 'weigh in on Sunday'}</em></div>
     <div class="card kpi"><small>Avg calories</small><b>${avg('kcal') == null ? '–' : kc(avg('kcal'))}</b><em>last 7 days · target ${kc(TG.kcal)}</em></div>
-    <div class="card kpi"><small>Plan followed</small><b>${pctText(sw.pct)}</b><em>this week · ${ICON.flame} ${planStreak()} day streak</em></div>
+    <div class="card kpi"><small>Meals as planned</small><b>${pctText(sw.pct)}</b><em>this week · ${ICON.flame} ${planStreak()} day streak</em></div>
+    <div class="card kpi"><small>Workouts</small><b>${ww.n ? `${ww.done}/${ww.n}` : '–'}</b><em>this week · ${ICON.flame} ${workoutStreak()} in a row</em></div>
   </div>
   <section class="card"><div class="chead"><h3>Weight</h3>${W.length > 1 ? `<span class="pill ${last.kg <= first.kg ? 'good' : ''}">${kgDiff(last.kg - first.kg)} since ${short(parse(first.k))}</span>` : ''}</div>
     ${weightChart(W.slice(-12))}
@@ -689,10 +758,12 @@ function viewStats() {
     <div class="cbars" style="--t:${(TG.kcal / max) * 100}%">${calBars}</div>
     <div class="legend"><span><i class="ok"></i>On target</span><span><i class="over"></i>Over 10%+</span><span><i class="under"></i>Under 15%+</span><span><i class="line"></i>Target</span></div>
     <p class="note">Average protein, last 7 days: <b>${avg('p') == null ? '–' : g(avg('p')) + 'g'}</b> of ${TG.protein}g.</p></section>
-  <section class="card"><div class="chead"><h3>Consistency</h3><span class="muted">${s30.hit}/${s30.days} days on plan · best streak ${bestStreak()}</span></div>
-    <div class="heat">${heat}</div><p class="note">Each square is a day, Monday on top. Darker = more of your plan eaten.</p></section>
+  <section class="card"><div class="chead"><h3>Consistency</h3><span class="muted">last 16 weeks</span></div>
+    <div class="heats"><div><h4>Meals <span>${s30.hit}/${s30.days} days on plan</span></h4><div class="heat">${heat(false)}</div></div>
+      <div><h4>Workouts <span>${w30.done}/${w30.n} done</span></h4><div class="heat w">${heat(true)}</div></div></div>
+    <p class="note">Each square is a day, Monday on top. Darker = more done. Faded = nothing planned (rest day).</p></section>
   ${missed.length ? `<section class="card"><div class="chead"><h3>Most often skipped</h3><span class="muted">last 30 days</span></div>
-    <div class="list">${missed.map(r => `<div class="item static"><span class="item-main"><b>${esc(r.title)}</b><small>eaten ${r.done} of ${r.n} times</small></span>
+    <div class="list">${missed.map(r => `<div class="item static"><span class="item-main"><b>${esc(r.title)}</b><small>done ${r.done} of ${r.n} times</small></span>
       <div class="mini-meter"><i style="width:${(r.done / r.n) * 100}%"></i></div></div>`).join('')}</div></section>` : ''}`;
 }
 
@@ -743,16 +814,16 @@ function buildSheets() {
       Date: k, Day: DOW[parse(k).getDay()], 'Weight kg': +S.weights[k] || '',
       'Target kcal': tgt, 'Planned kcal': g(T.planned.kcal), 'Eaten kcal': g(T.eaten.kcal), 'vs target': T.eaten.kcal ? g(T.eaten.kcal - tgt) : '',
       'Protein g': g(T.eaten.p), 'Carbs g': g(T.eaten.c), 'Fat g': g(T.eaten.f),
-      'Meals eaten': a ? `${a.done} of ${a.n}` : '', 'Plan %': a ? Math.round(a.pct * 100) : '', 'Extra kcal': g(T.extra.kcal),
+      'Meals eaten': a ? `${a.done} of ${a.n}` : '', 'Workouts done': (w => (w ? `${w.done} of ${w.n}` : ''))(adherence(k, true, true)), 'Plan %': a ? Math.round(a.pct * 100) : '', 'Extra kcal': g(T.extra.kcal),
     };
   });
   const log = [];
   sorted.forEach(k => {
     slotsOn(k).forEach(s => {
       const m = slotMeal(s);
-      log.push({ Date: k, Day: DOW[parse(k).getDay()], Time: s.time, Meal: m.title, kcal: g(m.kcal), 'Protein g': g(m.p), 'Carbs g': g(m.c), 'Fat g': g(m.f), Eaten: ate(k, s) ? 'Yes' : 'No' });
+      log.push({ Date: k, Day: DOW[parse(k).getDay()], Time: s.time, Type: isWorkout(m) ? 'Workout' : 'Meal', Meal: m.title, kcal: g(m.kcal), 'Protein g': g(m.p), 'Carbs g': g(m.c), 'Fat g': g(m.f), Eaten: ate(k, s) ? 'Yes' : 'No' });
     });
-    (S.days[k]?.extra || []).forEach(x => log.push({ Date: k, Day: DOW[parse(k).getDay()], Time: '', Meal: x.title + ' (extra)', kcal: g(x.kcal), 'Protein g': g(x.p), 'Carbs g': g(x.c), 'Fat g': g(x.f), Eaten: 'Yes' }));
+    (S.days[k]?.extra || []).forEach(x => log.push({ Date: k, Day: DOW[parse(k).getDay()], Time: '', Type: 'Extra', Meal: x.title + ' (extra)', kcal: g(x.kcal), 'Protein g': g(x.p), 'Carbs g': g(x.c), 'Fat g': g(x.f), Eaten: 'Yes' }));
   });
   return { Daily: daily, 'Meal log': log, Weight: weights().map(w => ({ Date: w.k, 'Weight kg': w.kg })) };
 }
@@ -764,7 +835,7 @@ function exportXlsx() {
     ws['!cols'] = Object.keys(rows[0] || {}).map(h => ({ wch: Math.min(40, Math.max(h.length + 2, ...rows.map(r => String(r[h] ?? '').length))) }));
     XLSX.utils.book_append_sheet(wb, ws, name);
   };
-  const meals = libSorted().map(m => ({ Meal: m.title, kcal: +m.kcal || 0, 'Protein g': +m.p || 0, 'Carbs g': +m.c || 0, 'Fat g': +m.f || 0, 'Every day at': (m.daily || []).join(', '), Details: m.details || '' }));
+  const meals = libSorted().map(m => ({ Meal: m.title, Type: isWorkout(m) ? 'Workout' : 'Meal', Days: daysText(m.days) || 'Every day', kcal: +m.kcal || 0, 'Protein g': +m.p || 0, 'Carbs g': +m.c || 0, 'Fat g': +m.f || 0, 'Every day at': (m.daily || []).join(', '), Details: m.details || '' }));
   Object.entries({ Meals: meals, ...buildSheets() }).forEach(([name, rows]) => add(rows, name));
   // full machine-readable copy so Restore can bring everything back exactly
   S.lastExport = today();

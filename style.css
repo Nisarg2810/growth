@@ -436,3 +436,40 @@ input[type="number"]::-webkit-inner-spin-button { display: none; }
   .hero { flex-direction: column; align-items: stretch; }
   .ringwrap { margin: 0 auto; }
 }
+
+/* ---------- workouts ---------- */
+:root { --w: #6d5ce8; --w-soft: #efedfd; }
+@media (prefers-color-scheme: dark) { :root { --w: #a397ff; --w-soft: #221f3d; } }
+.tag-w { display: inline-flex; align-items: center; gap: 4px; flex: none; font-size: 11.5px; font-weight: 600; color: var(--w); background: var(--w-soft); padding: 4px 8px; border-radius: 8px; }
+.item.workout .tick { border-color: color-mix(in srgb, var(--w) 45%, var(--line-2)); }
+.item.workout:hover .tick { border-color: var(--w); }
+.item.workout input:checked + .tick { background: var(--w); border-color: var(--w); }
+.item.workout.late input:not(:checked) + .tick { border-color: var(--warn); }
+.item.daily.workout { opacity: .85; }
+.daypick { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.daypick label { cursor: pointer; }
+.daypick input { position: absolute; opacity: 0; width: 0; }
+.daypick span { display: grid; place-items: center; height: 40px; border-radius: 12px; background: var(--sunken); color: var(--muted); font-weight: 700; font-size: 14px; transition: all .15s; }
+.daypick input:checked + span { background: var(--text); color: var(--bg); }
+.bignut.one { grid-template-columns: 1fr; }
+.bignut.one div:first-child { background: var(--w-soft); }
+.bignut.one div:first-child b { color: var(--w); }
+.group.first { margin-top: 4px; }
+.kpis { grid-template-columns: 1fr 1fr; }
+.kpis .kpi:first-child { grid-column: auto; }
+.heats { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.heats h4 { margin-bottom: 10px; display: flex; flex-direction: column; gap: 2px; }
+.heats h4 span { text-transform: none; letter-spacing: 0; font-weight: 500; font-size: 12px; }
+.heat.w .lv1 { background: color-mix(in srgb, var(--w) 25%, var(--l0)); }
+.heat.w .lv2 { background: color-mix(in srgb, var(--w) 50%, var(--l0)); }
+.heat.w .lv3 { background: color-mix(in srgb, var(--w) 75%, var(--l0)); }
+.heat.w .lv4 { background: var(--w); }
+@media (max-width: 720px) {
+  .heats { grid-template-columns: 1fr; }
+  .kpis .kpi:first-child { grid-column: auto; }
+}
+.lw { display: none; }
+.form:has(input[name="mf-kind"][value="workout"]:checked) .food-only { display: none; }
+.form:has(input[name="mf-kind"][value="workout"]:checked) .lf { display: none; }
+.form:has(input[name="mf-kind"][value="workout"]:checked) .lw { display: inline; }
+.form:has(input[name="mf-kind"][value="workout"]:checked) .four { grid-template-columns: 1fr; }
