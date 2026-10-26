@@ -17,6 +17,18 @@ const DAY_ONE = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const MONTHS_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const short = d => `${d.getDate()} ${MONTHS[d.getMonth()]}`;
+// times are stored as 24-hour "HH:MM" (sorts correctly) and shown as 12-hour "7:30 PM"
+const t12 = t => { if (!t) return ''; const [h, m] = t.split(':').map(Number); return `${h % 12 || 12}:${pad(m)} ${h < 12 ? 'AM' : 'PM'}`; };
+function parseTimes(str) {
+  const out = [];
+  String(str || '').replace(/(\d{1,2})(?::(\d{2}))?(?::\d{2})?\s*([ap])\.?\s*m\b\.?|(\d{1,2}):(\d{2})/gi, (_, h1, m1, ap, h2, m2) => {
+    let h = +(h1 ?? h2);
+    const m = +(m1 ?? m2 ?? 0);
+    if (ap) h = (h % 12) + (/p/i.test(ap) ? 12 : 0);
+    if (h < 24 && m < 60) out.push(`${pad(h)}:${pad(m)}`);
+  });
+  return out;
+}
 const read = k => { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } };
 const write = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { toast('Could not save on this device'); } };
 const svg = (p, s = 18) => `<svg viewBox="0 0 24 24" width="${s}" height="${s}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p}</svg>`;
@@ -180,7 +192,7 @@ function fromRow(r) {
   return {
     id: get(COLS.id), title: get(COLS.title), kind: /work|exercise|run|gym|walk|yoga/i.test(get(COLS.kind)) ? 'workout' : 'food',
     details: get(COLS.details), kcal: +get(COLS.kcal) || 0, p: +get(COLS.p) || 0, c: +get(COLS.c) || 0, f: +get(COLS.f) || 0, fb: +get(COLS.fb) || 0,
-    daily: (get(COLS.daily).match(/\d{1,2}:\d{2}/g) || []).map(t => t.padStart(5, '0')), days: parseDays(get(COLS.days)), from: get(COLS.from),
+    daily: parseTimes(get(COLS.daily)), days: parseDays(get(COLS.days)), from: get(COLS.from),
     ingredients: get(COLS.ingredients).split('\n').map(l => l.split('|').map(x => x.trim())).filter(x => x[0])
       .map(x => ({ name: x[0], qty: x[1] || '', kcal: +x[2] || 0, p: +x[3] || 0, c: +x[4] || 0, f: +x[5] || 0 })),
   };
@@ -398,7 +410,7 @@ const sheetHead = (title, sub = '') => `<div class="sh-head"><div><h3>${title}</
 const searchBox = (list, ph) => `<label class="search">${ICON.search}<input data-q="${list}" placeholder="${ph}" autocomplete="off"></label>`;
 const burnText = m => (+m.kcal ? `~${kc(m.kcal)} kcal burned` : 'workout');
 const mealSub = m => (isWorkout(m) ? `Workout · ${burnText(m)}` : `${kc(+m.kcal || 0)} kcal · ${g(+m.p || 0)}g protein`);
-const scheduleText = m => (m.daily?.length ? `${daysText(m.days) || 'Every day'} at ${m.daily.join(', ')}` : '');
+const scheduleText = m => (m.daily?.length ? `${daysText(m.days) || 'Every day'} at ${m.daily.map(t12).join(', ')}` : '');
 const match = (m, q) => m.title.toLowerCase().includes(q.trim().toLowerCase()) || (m.details || '').toLowerCase().includes(q.trim().toLowerCase());
 const pickRows = (q, act) => {
   const list = libSorted().filter(m => match(m, q));
@@ -484,7 +496,7 @@ const ACTIONS = {
     const v = id => $(`#mf-${id}`).value.trim();
     if (!v('title')) return toast('Give the meal a name');
     const old = UI.editing?.id ? mealById(UI.editing.id) : null;
-    const daily = v('daily').split(/[,\s]+/).filter(t => /^\d{1,2}:\d{2}$/.test(t)).map(t => t.padStart(5, '0'));
+    const daily = parseTimes(v('daily'));
     const kind = document.querySelector('input[name="mf-kind"]:checked')?.value || 'food';
     const days = [...document.querySelectorAll('input[name="mf-day"]:checked')].map(x => +x.value);
     const m = {
@@ -540,7 +552,7 @@ function mealForm(m) {
       <label class="field">Name<input id="mf-title" value="${esc(m.title)}" placeholder="Overnight oats" required data-focus></label>
       <label class="field">Details<textarea id="mf-details" rows="2" placeholder="Oats 50 g, milk 200 ml, banana…">${esc(m.details)}</textarea></label>
       <div class="four">${[['kcal', '<span class="lf">Calories</span><span class="lw">kcal burned (estimate)</span>'], ['p', 'Protein g'], ['c', 'Carbs g'], ['f', 'Fat g'], ['fb', 'Fiber g']].map(([k, l]) => `<label class="field ${k === 'kcal' ? '' : 'food-only'}">${l}<input type="number" inputmode="decimal" step="0.1" id="mf-${k}" value="${esc(m[k])}"></label>`).join('')}</div>
-      <label class="field">Repeats at <small>optional — e.g. 07:00, 17:00</small><input id="mf-daily" value="${esc((m.daily || []).join(', '))}" placeholder="Leave empty to plan it day by day"></label>
+      <label class="field">Repeats at <small>optional — e.g. 7:00 AM, 5:00 PM</small><input id="mf-daily" value="${esc((m.daily || []).map(t12).join(', '))}" placeholder="Leave empty to plan it day by day"></label>
       <div class="field">On these days<div class="daypick">${DAY3.map((d, i) => `<label><input type="checkbox" name="mf-day" value="${i}" ${!m.days?.length || m.days.includes(i) ? 'checked' : ''}><span>${d[0]}</span></label>`).join('')}</div></div>
       <button class="btn wide">Save meal</button></form>`);
 }
@@ -621,7 +633,7 @@ function viewToday() {
     return `<label class="item ${w ? 'workout' : ''} ${s.time && s.time < late ? 'late' : ''}">
       <input type="checkbox" data-p="days.${k}.ate.${s.id}" ${ate(k, s) ? 'checked' : ''}>
       <span class="tick">${ICON.check}</span>
-      <span class="item-main"><b>${esc(m.title)}</b><small>${s.time || 'Any time'} · ${w ? burnText(m) : `${kc(+m.kcal || 0)} kcal${g(+m.p || 0) ? ` · ${g(m.p)}g protein` : ''}`}</small></span>
+      <span class="item-main"><b>${esc(m.title)}</b><small>${t12(s.time) || 'Any time'} · ${w ? burnText(m) : `${kc(+m.kcal || 0)} kcal${g(+m.p || 0) ? ` · ${g(m.p)}g protein` : ''}`}</small></span>
       ${w ? `<span class="tag-w">${ICON.run}Workout</span>` : s.daily ? `<span class="chip-daily" title="Repeats">${ICON.repeat}</span>` : ''}</label>`;
   };
   const list = slots.length ? Object.entries(groups).map(([name, items]) => {
@@ -664,7 +676,7 @@ function viewPlan() {
   const rows = items.map(s => {
     const meal = slotMeal(s);
     const w = isWorkout(meal), sub = w ? burnText(meal) : `${kc(+meal.kcal || 0)} kcal`;
-    if (s.daily) return `<div class="item static daily ${w ? 'workout' : ''}"><span class="time">${s.time}</span><span class="item-main"><b>${esc(meal.title)}</b><small>${sub} · ${daysText(meal.days) || 'every day'}</small></span>${w ? `<span class="tag-w">${ICON.run}</span>` : `<span class="chip-daily">${ICON.repeat}</span>`}</div>`;
+    if (s.daily) return `<div class="item static daily ${w ? 'workout' : ''}"><span class="time">${t12(s.time)}</span><span class="item-main"><b>${esc(meal.title)}</b><small>${sub} · ${daysText(meal.days) || 'every day'}</small></span>${w ? `<span class="tag-w">${ICON.run}</span>` : `<span class="chip-daily">${ICON.repeat}</span>`}</div>`;
     return `<div class="item static ${w ? 'workout' : ''}"><input type="time" class="time-in" data-p="menus.${ws}.slots.${m.slots.indexOf(s)}.time" value="${esc(s.time)}">
       <span class="item-main"><b>${esc(meal.title)}</b><small>${w ? sub : `${sub} · ${g(+meal.p || 0)}g protein`}</small></span>
       <button class="icon-btn sm" data-act="delSlot" data-v="${s.id}" aria-label="Remove">${ICON.x}</button></div>`;
@@ -825,7 +837,7 @@ function buildSheets() {
   sorted.forEach(k => {
     slotsOn(k).forEach(s => {
       const m = slotMeal(s);
-      log.push({ Date: k, Day: DOW[parse(k).getDay()], Time: s.time, Type: isWorkout(m) ? 'Workout' : 'Meal', Meal: m.title, kcal: g(m.kcal), 'Protein g': g(m.p), 'Carbs g': g(m.c), 'Fat g': g(m.f), 'Fiber g': +(+m.fb || 0).toFixed(1), Eaten: ate(k, s) ? 'Yes' : 'No' });
+      log.push({ Date: k, Day: DOW[parse(k).getDay()], Time: t12(s.time), Type: isWorkout(m) ? 'Workout' : 'Meal', Meal: m.title, kcal: g(m.kcal), 'Protein g': g(m.p), 'Carbs g': g(m.c), 'Fat g': g(m.f), 'Fiber g': +(+m.fb || 0).toFixed(1), Eaten: ate(k, s) ? 'Yes' : 'No' });
     });
     (S.days[k]?.extra || []).forEach(x => log.push({ Date: k, Day: DOW[parse(k).getDay()], Time: '', Type: 'Extra', Meal: x.title + ' (extra)', kcal: g(x.kcal), 'Protein g': g(x.p), 'Carbs g': g(x.c), 'Fat g': g(x.f), 'Fiber g': +(+x.fb || 0).toFixed(1), Eaten: 'Yes' }));
   });

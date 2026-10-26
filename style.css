@@ -481,3 +481,6 @@ input[type="number"]::-webkit-inner-spin-button { display: none; }
 .bignut { grid-template-columns: repeat(5, 1fr); }
 .bignut div { padding: 12px 4px; }
 @media (max-width: 720px) { .bignut b { font-size: 15px; } }
+/* 12-hour times */
+.time { width: 72px; }
+.time-in { width: 100px; }
