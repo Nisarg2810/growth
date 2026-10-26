@@ -151,7 +151,7 @@ async function signOut(expired) {
 /* ---------- meal library ---------- */
 // The Sheet's Meals tab: one row per meal or workout, columns matched by header name
 const COLS = {
-  id: 'id', title: 'Meal', kind: 'Type', details: 'Details', kcal: 'kcal', p: 'Protein g', c: 'Carbs g', f: 'Fat g',
+  id: 'id', title: 'Meal', kind: 'Type', details: 'Details', kcal: 'kcal', p: 'Protein g', c: 'Carbs g', f: 'Fat g', fb: 'Fiber g',
   daily: 'Every day at', days: 'Days', from: 'From', ingredients: 'Ingredients (one per line: name | qty | kcal | P | C | F)',
 };
 const DAY3 = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -179,7 +179,7 @@ function fromRow(r) {
   const get = h => { const k = keys.find(x => x === h) ?? keys.find(x => x.toLowerCase().startsWith(h.split(' (')[0].toLowerCase())); return k ? String(r[k] ?? '').trim() : ''; };
   return {
     id: get(COLS.id), title: get(COLS.title), kind: /work|exercise|run|gym|walk|yoga/i.test(get(COLS.kind)) ? 'workout' : 'food',
-    details: get(COLS.details), kcal: +get(COLS.kcal) || 0, p: +get(COLS.p) || 0, c: +get(COLS.c) || 0, f: +get(COLS.f) || 0,
+    details: get(COLS.details), kcal: +get(COLS.kcal) || 0, p: +get(COLS.p) || 0, c: +get(COLS.c) || 0, f: +get(COLS.f) || 0, fb: +get(COLS.fb) || 0,
     daily: (get(COLS.daily).match(/\d{1,2}:\d{2}/g) || []).map(t => t.padStart(5, '0')), days: parseDays(get(COLS.days)), from: get(COLS.from),
     ingredients: get(COLS.ingredients).split('\n').map(l => l.split('|').map(x => x.trim())).filter(x => x[0])
       .map(x => ({ name: x[0], qty: x[1] || '', kcal: +x[2] || 0, p: +x[3] || 0, c: +x[4] || 0, f: +x[5] || 0 })),
@@ -187,7 +187,7 @@ function fromRow(r) {
 }
 const toRow = m => ({
   [COLS.id]: m.id, [COLS.title]: m.title, [COLS.kind]: m.kind === 'workout' ? 'Workout' : 'Meal', [COLS.details]: m.details || '',
-  [COLS.kcal]: +m.kcal || 0, [COLS.p]: +m.p || 0, [COLS.c]: +m.c || 0, [COLS.f]: +m.f || 0,
+  [COLS.kcal]: +m.kcal || 0, [COLS.p]: +m.p || 0, [COLS.c]: +m.c || 0, [COLS.f]: +m.f || 0, [COLS.fb]: +m.fb || 0,
   [COLS.daily]: (m.daily || []).join(', '), [COLS.days]: daysText(m.days), [COLS.from]: m.from || '',
   [COLS.ingredients]: (m.ingredients || []).map(x => [x.name, x.qty, x.kcal, x.p, x.c, x.f].join(' | ')).join('\n'),
 });
@@ -219,8 +219,8 @@ async function removeMeal(id) {
 }
 
 /* ---------- nutrition ---------- */
-const ZERO = { kcal: 0, p: 0, c: 0, f: 0 };
-const addN = (a, m) => ({ kcal: a.kcal + (+m.kcal || 0), p: a.p + (+m.p || 0), c: a.c + (+m.c || 0), f: a.f + (+m.f || 0) });
+const ZERO = { kcal: 0, p: 0, c: 0, f: 0, fb: 0 };
+const addN = (a, m) => ({ kcal: a.kcal + (+m.kcal || 0), p: a.p + (+m.p || 0), c: a.c + (+m.c || 0), f: a.f + (+m.f || 0), fb: a.fb + (+m.fb || 0) });
 const sumN = list => list.reduce(addN, { ...ZERO });
 const kc = n => Math.round(n).toLocaleString('en-IN');
 const g = n => Math.round(n);
@@ -251,7 +251,7 @@ const isW = s => isWorkout(slotMeal(s));
 // live values from the library; a snapshot keeps history right if a meal is later deleted
 function slotMeal(s) {
   const m = mealById(s.mealId);
-  if (m && !s.daily) s.snap = { title: m.title, kind: m.kind, kcal: +m.kcal || 0, p: +m.p || 0, c: +m.c || 0, f: +m.f || 0 };
+  if (m && !s.daily) s.snap = { title: m.title, kind: m.kind, kcal: +m.kcal || 0, p: +m.p || 0, c: +m.c || 0, f: +m.f || 0, fb: +m.fb || 0 };
   return m || s.snap || { title: '(deleted meal)', ...ZERO };
 }
 // past days count fully; today only meals already ticked or whose time has passed. null = nothing planned
@@ -431,7 +431,7 @@ const ACTIONS = {
       <button class="btn">Add</button></div></form>`),
   addExtraMeal: id => {
     const m = mealById(id);
-    day(UI.date).extra.push({ title: m.title, mealId: m.id, kcal: +m.kcal || 0, p: +m.p || 0, c: +m.c || 0, f: +m.f || 0 });
+    day(UI.date).extra.push({ title: m.title, mealId: m.id, kcal: +m.kcal || 0, p: +m.p || 0, c: +m.c || 0, f: +m.f || 0, fb: +m.fb || 0 });
     save(); closeSheet(); render(); toast(`Added ${m.title}`);
   },
   addQuick: () => {
@@ -471,7 +471,7 @@ const ACTIONS = {
     openSheet(`${sheetHead(esc(m.title), m.details ? esc(m.details) : '')}
       ${isWorkout(m) ? `<div class="bignut one"><div><b>${+m.kcal ? '~' + kc(m.kcal) : '–'}</b><small>kcal burned (estimate)</small></div></div>`
         : `<div class="bignut"><div><b>${kc(+m.kcal || 0)}</b><small>kcal</small></div><div><b>${g(+m.p || 0)}g</b><small>protein</small></div>
-        <div><b>${g(+m.c || 0)}g</b><small>carbs</small></div><div><b>${g(+m.f || 0)}g</b><small>fat</small></div></div>`}
+        <div><b>${g(+m.c || 0)}g</b><small>carbs</small></div><div><b>${g(+m.f || 0)}g</b><small>fat</small></div><div><b>${+(+m.fb || 0).toFixed(1)}g</b><small>fiber</small></div></div>`}
       ${m.daily?.length ? `<p class="dailynote">${ICON.repeat} ${scheduleText(m)}</p>` : ''}
       ${m.ingredients?.length ? `<h4>Recipe</h4><table class="ing"><tr><th>Ingredient</th><th>kcal</th><th>P</th><th>C</th><th>F</th></tr>
         ${m.ingredients.map(x => `<tr><td>${esc(x.name)}<small>${esc(x.qty)}</small></td><td>${kc(x.kcal)}</td><td>${+(+x.p).toFixed(1)}</td><td>${+(+x.c).toFixed(1)}</td><td>${+(+x.f).toFixed(1)}</td></tr>`).join('')}</table>` : ''}
@@ -489,7 +489,7 @@ const ACTIONS = {
     const days = [...document.querySelectorAll('input[name="mf-day"]:checked')].map(x => +x.value);
     const m = {
       ...(old || {}), id: old?.id || (kind === 'workout' ? 'w' : 'm') + uid(), kind, title: v('title'), details: v('details'),
-      kcal: +v('kcal') || 0, p: kind === 'workout' ? 0 : +v('p') || 0, c: kind === 'workout' ? 0 : +v('c') || 0, f: kind === 'workout' ? 0 : +v('f') || 0,
+      kcal: +v('kcal') || 0, p: kind === 'workout' ? 0 : +v('p') || 0, c: kind === 'workout' ? 0 : +v('c') || 0, f: kind === 'workout' ? 0 : +v('f') || 0, fb: kind === 'workout' ? 0 : +v('fb') || 0,
       daily, days: days.length === 7 ? [] : days,
       from: daily.length ? old?.from || today() : '', ingredients: old?.ingredients || [],
     };
@@ -539,7 +539,7 @@ function mealForm(m) {
       <div class="field">Type<div class="seg">${[['food', 'Meal'], ['workout', 'Workout']].map(([v, l]) => `<label><input type="radio" name="mf-kind" value="${v}" ${(m.kind || 'food') === v ? 'checked' : ''}><span>${l}</span></label>`).join('')}</div></div>
       <label class="field">Name<input id="mf-title" value="${esc(m.title)}" placeholder="Overnight oats" required data-focus></label>
       <label class="field">Details<textarea id="mf-details" rows="2" placeholder="Oats 50 g, milk 200 ml, banana…">${esc(m.details)}</textarea></label>
-      <div class="four">${[['kcal', '<span class="lf">Calories</span><span class="lw">kcal burned (estimate)</span>'], ['p', 'Protein g'], ['c', 'Carbs g'], ['f', 'Fat g']].map(([k, l]) => `<label class="field ${k === 'kcal' ? '' : 'food-only'}">${l}<input type="number" inputmode="decimal" step="0.1" id="mf-${k}" value="${esc(m[k])}"></label>`).join('')}</div>
+      <div class="four">${[['kcal', '<span class="lf">Calories</span><span class="lw">kcal burned (estimate)</span>'], ['p', 'Protein g'], ['c', 'Carbs g'], ['f', 'Fat g'], ['fb', 'Fiber g']].map(([k, l]) => `<label class="field ${k === 'kcal' ? '' : 'food-only'}">${l}<input type="number" inputmode="decimal" step="0.1" id="mf-${k}" value="${esc(m[k])}"></label>`).join('')}</div>
       <label class="field">Repeats at <small>optional — e.g. 07:00, 17:00</small><input id="mf-daily" value="${esc((m.daily || []).join(', '))}" placeholder="Leave empty to plan it day by day"></label>
       <div class="field">On these days<div class="daypick">${DAY3.map((d, i) => `<label><input type="checkbox" name="mf-day" value="${i}" ${!m.days?.length || m.days.includes(i) ? 'checked' : ''}><span>${d[0]}</span></label>`).join('')}</div></div>
       <button class="btn wide">Save meal</button></form>`);
@@ -591,18 +591,20 @@ const pageHead = (title, sub, nav = '') => `<div class="phead"><div><h1>${title}
 const arrows = (act, back, fwd) => `<button class="icon-btn" data-act="${act}" data-v="${back}" aria-label="Previous">${ICON.left}</button><button class="icon-btn" data-act="${act}" data-v="${fwd}" aria-label="Next">${ICON.right}</button>`;
 
 function hero(k) {
-  const T = totals(k), TG = target(k), tgt = TG.kcal, eaten = T.eaten.kcal, left = tgt - eaten;
-  const C = 2 * Math.PI * 52, pct = tgt ? Math.min(eaten / tgt, 1) : 0;
-  const bar = (label, val, goal, cls) => `<div class="mb ${cls}"><div class="mbh"><span>${label}</span><span><b>${g(val)}</b> / ${g(goal)}g</span></div>
-    <div class="mbt"><i style="width:${goal ? Math.min(val / goal, 1) * 100 : 0}%"></i></div></div>`;
+  // what you planned for the day vs what you've ticked as eaten
+  const T = totals(k), plan = T.planned.kcal, eaten = T.eaten.kcal, left = plan - eaten;
+  const C = 2 * Math.PI * 52, pct = plan ? Math.min(eaten / plan, 1) : 0;
+  const bar = (label, key, cls) => { const v = T.eaten[key], goal = T.planned[key], dp = key === 'fb' ? 1 : 0;
+    return `<div class="mb ${cls}"><div class="mbh"><span>${label}</span><span><b>${+v.toFixed(dp)}</b> / ${+goal.toFixed(dp)}g</span></div>
+    <div class="mbt"><i style="width:${goal ? Math.min(v / goal, 1) * 100 : 0}%"></i></div></div>`; };
   return `<div class="ringwrap">
       <svg viewBox="0 0 120 120" class="ring"><circle class="trk" cx="60" cy="60" r="52"/>
         ${pct ? `<circle class="val ${left < 0 ? 'over' : ''}" cx="60" cy="60" r="52" stroke-dasharray="${C * pct} ${C}"/>` : ''}</svg>
-      <div class="ringtxt"><b>${kc(Math.abs(left))}</b><small>${left >= 0 ? 'kcal left' : 'kcal over'}</small></div>
+      <div class="ringtxt"><b>${kc(plan ? Math.abs(left) : eaten)}</b><small>${!plan ? 'kcal eaten' : left >= 0 ? 'kcal left' : 'kcal over plan'}</small></div>
     </div>
     <div class="herostats">
-      <div class="hs"><div><small>Eaten</small><b>${kc(eaten)}</b></div><div><small>Target</small><b>${kc(tgt)}</b></div><div><small>Planned</small><b>${kc(T.planned.kcal)}</b></div></div>
-      ${bar('Protein', T.eaten.p, TG.protein, 'p')}${bar('Carbs', T.eaten.c, T.planned.c, 'c')}${bar('Fat', T.eaten.f, T.planned.f, 'f')}
+      <div class="hs two"><div><small>Eaten</small><b>${kc(eaten)}</b></div><div><small>Planned</small><b>${kc(plan)}</b></div></div>
+      ${bar('Protein', 'p', 'p')}${bar('Carbs', 'c', 'c')}${bar('Fat', 'f', 'f')}${bar('Fiber', 'fb', 'fb')}
     </div>`;
 }
 const PERIODS = [['Morning', '00:00', '12:00'], ['Afternoon', '12:00', '17:00'], ['Evening', '17:00', '21:00'], ['Night', '21:00', '99:99']];
@@ -815,7 +817,7 @@ function buildSheets() {
     return {
       Date: k, Day: DOW[parse(k).getDay()], 'Weight kg': +S.weights[k] || '',
       'Target kcal': tgt, 'Planned kcal': g(T.planned.kcal), 'Eaten kcal': g(T.eaten.kcal), 'vs target': T.eaten.kcal ? g(T.eaten.kcal - tgt) : '',
-      'Protein g': g(T.eaten.p), 'Carbs g': g(T.eaten.c), 'Fat g': g(T.eaten.f),
+      'Protein g': g(T.eaten.p), 'Carbs g': g(T.eaten.c), 'Fat g': g(T.eaten.f), 'Fiber g': +T.eaten.fb.toFixed(1),
       'Meals eaten': a ? `${a.done} of ${a.n}` : '', 'Workouts done': (w => (w ? `${w.done} of ${w.n}` : ''))(adherence(k, true, true)), 'Plan %': a ? Math.round(a.pct * 100) : '', 'Extra kcal': g(T.extra.kcal),
     };
   });
@@ -823,9 +825,9 @@ function buildSheets() {
   sorted.forEach(k => {
     slotsOn(k).forEach(s => {
       const m = slotMeal(s);
-      log.push({ Date: k, Day: DOW[parse(k).getDay()], Time: s.time, Type: isWorkout(m) ? 'Workout' : 'Meal', Meal: m.title, kcal: g(m.kcal), 'Protein g': g(m.p), 'Carbs g': g(m.c), 'Fat g': g(m.f), Eaten: ate(k, s) ? 'Yes' : 'No' });
+      log.push({ Date: k, Day: DOW[parse(k).getDay()], Time: s.time, Type: isWorkout(m) ? 'Workout' : 'Meal', Meal: m.title, kcal: g(m.kcal), 'Protein g': g(m.p), 'Carbs g': g(m.c), 'Fat g': g(m.f), 'Fiber g': +(+m.fb || 0).toFixed(1), Eaten: ate(k, s) ? 'Yes' : 'No' });
     });
-    (S.days[k]?.extra || []).forEach(x => log.push({ Date: k, Day: DOW[parse(k).getDay()], Time: '', Type: 'Extra', Meal: x.title + ' (extra)', kcal: g(x.kcal), 'Protein g': g(x.p), 'Carbs g': g(x.c), 'Fat g': g(x.f), Eaten: 'Yes' }));
+    (S.days[k]?.extra || []).forEach(x => log.push({ Date: k, Day: DOW[parse(k).getDay()], Time: '', Type: 'Extra', Meal: x.title + ' (extra)', kcal: g(x.kcal), 'Protein g': g(x.p), 'Carbs g': g(x.c), 'Fat g': g(x.f), 'Fiber g': +(+x.fb || 0).toFixed(1), Eaten: 'Yes' }));
   });
   return { Daily: daily, 'Meal log': log, Weight: weights().map(w => ({ Date: w.k, 'Weight kg': w.kg })) };
 }
@@ -837,7 +839,7 @@ function exportXlsx() {
     ws['!cols'] = Object.keys(rows[0] || {}).map(h => ({ wch: Math.min(40, Math.max(h.length + 2, ...rows.map(r => String(r[h] ?? '').length))) }));
     XLSX.utils.book_append_sheet(wb, ws, name);
   };
-  const meals = libSorted().map(m => ({ Meal: m.title, Type: isWorkout(m) ? 'Workout' : 'Meal', Days: daysText(m.days) || 'Every day', kcal: +m.kcal || 0, 'Protein g': +m.p || 0, 'Carbs g': +m.c || 0, 'Fat g': +m.f || 0, 'Every day at': (m.daily || []).join(', '), Details: m.details || '' }));
+  const meals = libSorted().map(m => ({ Meal: m.title, Type: isWorkout(m) ? 'Workout' : 'Meal', Days: daysText(m.days) || 'Every day', kcal: +m.kcal || 0, 'Protein g': +m.p || 0, 'Carbs g': +m.c || 0, 'Fat g': +m.f || 0, 'Fiber g': +m.fb || 0, 'Every day at': (m.daily || []).join(', '), Details: m.details || '' }));
   Object.entries({ Meals: meals, ...buildSheets() }).forEach(([name, rows]) => add(rows, name));
   // full machine-readable copy so Restore can bring everything back exactly
   S.lastExport = today();
